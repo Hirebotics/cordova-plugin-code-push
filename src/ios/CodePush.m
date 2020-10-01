@@ -1,6 +1,5 @@
 #import <Cordova/CDV.h>
 #import <Cordova/CDVConfigParser.h>
-#import <Cordova/CDVWebViewEngineProtocol.h>
 #import "CodePush.h"
 #import "CodePushPackageMetadata.h"
 #import "CodePushPackageManager.h"
@@ -21,6 +20,7 @@ NSDate* lastResignedDate;
 NSString* const DeploymentKeyPreference = @"codepushdeploymentkey";
 NSString* const PublicKeyPreference = @"codepushpublickey";
 StatusReport* rollbackStatusReport = nil;
+CDVConfigParser* configParserDelegate = nil;
 
 - (void)getBinaryHash:(CDVInvokedUrlCommand *)command {
     [self.commandDelegate runInBackground:^{
@@ -75,7 +75,7 @@ StatusReport* rollbackStatusReport = nil;
 
 - (void)getPublicKey:(CDVInvokedUrlCommand *)command {
     [self.commandDelegate runInBackground:^{
-        NSString *publicKey = ((CDVViewController *) self.viewController).settings[PublicKeyPreference];
+        NSString *publicKey = [self getPreferenceValue:PublicKeyPreference];
         CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
                                                             messageAsString:publicKey];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
@@ -142,7 +142,7 @@ StatusReport* rollbackStatusReport = nil;
             // Report first run of a binary version app
             [CodePushPackageManager markBinaryFirstRunFlag];
             NSString* appVersion = [Utilities getApplicationVersion];
-            NSString* deploymentKey = ((CDVViewController *)self.viewController).settings[DeploymentKeyPreference];
+            NSString* deploymentKey = [self getPreferenceValue:DeploymentKeyPreference];
             StatusReport* statusReport = [[StatusReport alloc] initWithStatus:STORE_VERSION
                                                                      andLabel:nil
                                                                 andAppVersion:appVersion
@@ -296,7 +296,7 @@ StatusReport* rollbackStatusReport = nil;
 
 - (void)sendResultForPreference:(NSString*)preferenceName command:(CDVInvokedUrlCommand*)command {
     [self.commandDelegate runInBackground:^{
-        NSString* preferenceValue = ((CDVViewController *)self.viewController).settings[preferenceName];
+        NSString* preferenceValue = [self getPreferenceValue:preferenceName];
         // length of NIL is zero
         CDVPluginResult* pluginResult;
         if ([preferenceValue length] > 0) {
@@ -341,7 +341,7 @@ StatusReport* rollbackStatusReport = nil;
 - (void)navigateToLocalDeploymentIfExists {
     CodePushPackageMetadata* deployedPackageMetadata = [CodePushPackageManager getCurrentPackageMetadata];
     if (deployedPackageMetadata && deployedPackageMetadata.localPath) {
-        NSString* startPage = ((CDVViewController *)self.viewController).startPage;
+        NSString* startPage = [self getStartPage];
         NSURL* URL = [self getStartPageURLForLocalPackage:deployedPackageMetadata.localPath];
         if (![URL.path containsString:startPage]) {
             return;
@@ -413,7 +413,7 @@ StatusReport* rollbackStatusReport = nil;
 #endif
 }
 
-+ (Boolean) hasIonicWebViewEngine:(id<CDVWebViewEngineProtocol>) webViewEngine {
++ (Boolean) hasIonicWebViewEngine:(id) webViewEngine {
     NSString * webViewEngineClass = NSStringFromClass([webViewEngine class]);
     SEL setServerBasePath = NSSelectorFromString(@"setServerBasePath:");
     if ([webViewEngineClass  isEqual: @"CDVWKWebViewEngine"] && [webViewEngine respondsToSelector:setServerBasePath]) {
@@ -427,7 +427,7 @@ StatusReport* rollbackStatusReport = nil;
     return specifiedServerPath;
 }
 
-+ (void) setServerBasePath:(NSString*)serverPath webView:(id<CDVWebViewEngineProtocol>) webViewEngine {
++ (void) setServerBasePath:(NSString*)serverPath webView:(id) webViewEngine {
     if ([CodePush hasIonicWebViewEngine: webViewEngine]) {
         specifiedServerPath = serverPath;
         SEL setServerBasePath = NSSelectorFromString(@"setServerBasePath:");
@@ -457,15 +457,7 @@ StatusReport* rollbackStatusReport = nil;
 
 - (NSString*)getConfigLaunchUrl
 {
-    CDVConfigParser* delegate = [[CDVConfigParser alloc] init];
-    NSString* configPath = [[NSBundle mainBundle] pathForResource:@"config" ofType:@"xml"];
-    NSURL* configUrl = [NSURL fileURLWithPath:configPath];
-
-    NSXMLParser* configParser = [[NSXMLParser alloc] initWithContentsOfURL:configUrl];
-    [configParser setDelegate:((id < NSXMLParserDelegate >)delegate)];
-    [configParser parse];
-
-    return delegate.startPage;
+    return [self getStartPage];
 }
 
 - (NSURL *)getStartPageURLForLocalPackage:(NSString*)packageLocation {
@@ -488,7 +480,7 @@ StatusReport* rollbackStatusReport = nil;
         if ([CodePush hasIonicWebViewEngine: self.webViewEngine]) {
             [CodePush setServerBasePath:URL.path webView:self.webViewEngine];
         } else {
-            ((CDVViewController *)self.viewController).startPage = [URL absoluteString];
+            [self setStartPage:[URL absoluteString]];
         }
     }
 }
@@ -544,6 +536,45 @@ StatusReport* rollbackStatusReport = nil;
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:version];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
     }];
+}
+
+-(NSString*) getStartPage {
+    // ((CDVViewController *)self.viewController).startPage;
+    // how do we get the start page?
+    return @"index.html";
+}
+
+-(void) setStartPage: (NSString *) path {
+    // TODO
+}
+
+-(NSString*) getPreferenceValue: (NSString*) preferenceName {
+    if([self isCapacitor]) {
+        return [self getConfigParser].settings[preferenceName];
+    } else {
+        NSString* preferenceValue = ((CDVViewController *)self.viewController).settings[preferenceName];
+        return preferenceValue;
+    }
+}
+
+-(BOOL) isCapacitor {
+    return [self.viewController isKindOfClass:NSClassFromString(@"Capacitor.CAPBridgeViewController")];
+}
+
+-(CDVConfigParser*) getConfigParser {
+    if(configParserDelegate == nil) {
+        CDVConfigParser* delegate = [[CDVConfigParser alloc] init];
+        NSString* configPath = [[NSBundle mainBundle] pathForResource:@"config" ofType:@"xml"];
+        NSURL* configUrl = [NSURL fileURLWithPath:configPath];
+
+        NSXMLParser* configParser = [[NSXMLParser alloc] initWithContentsOfURL:configUrl];
+        [configParser setDelegate:((id < NSXMLParserDelegate >)delegate)];
+        [configParser parse];
+        
+        configParserDelegate = delegate;
+    }
+    
+    return configParserDelegate;
 }
 
 @end
